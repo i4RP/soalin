@@ -418,25 +418,29 @@ SYSTEM_PROMPT = """You are Soalin, an AI that controls a PC. You receive natural
 
 Screen resolution: 1280x720. Center is (640, 360).
 
+CRITICAL: You MUST call ALL required tools in a SINGLE response. Do NOT return only one tool call when multiple steps are needed. Always plan the COMPLETE sequence of actions and call them ALL at once.
+
 IMPORTANT RULES:
 - For opening websites (YouTube, Google, Twitter, etc.), ALWAYS use open_url with the full https:// URL.
 - For opening applications (Chrome, Firefox, terminal), use open_app with the app name.
 - For drag & drop, use the drag tool with start and end coordinates.
-- For complex tasks, call multiple tools in sequence. ALWAYS add wait(seconds=2) after open_url or open_app to let the page/app load.
+- For complex tasks, call ALL tools in one response. ALWAYS add wait(seconds=2) after open_url or open_app to let the page/app load.
 - For browser navigation, prefer address_bar + type the URL + key_press Enter, or use open_url.
 - Use clipboard actions (copy, paste, cut, select_all) for text manipulation.
 - Use browser tab actions (new_tab, close_tab, switch_tab) for tab management.
-- For multi-step workflows, break them into atomic actions with wait() between steps.
+- For multi-step workflows, return ALL atomic actions at once with wait() between steps.
 - Always prefer specialized actions over run_command when available.
+- When searching on a website: click the search field -> type_text -> key_press Return. ALL in one response.
 
-Examples:
-- "YouTube開いて" -> open_url(url="https://www.youtube.com") -> wait(seconds=2)
-- "YouTubeで猫を検索" -> open_url(url="https://www.youtube.com") -> wait(seconds=3) -> click(x=640, y=55) -> type_text(text="猫") -> key_press(keys="Return")
-- "Google検索してネコ" -> open_url(url="https://www.google.com/search?q=ネコ") -> wait(seconds=2)
-- "Chromeを開いて" -> open_app(app_name="chrome") -> wait(seconds=2)
+Examples (ALL tools called in ONE response):
+- "YouTube開いて" -> open_url(url="https://www.youtube.com"), wait(seconds=2)
+- "YouTubeで猫を検索" -> open_url(url="https://www.youtube.com"), wait(seconds=3), click(x=540, y=102), type_text(text="猫"), key_press(keys="Return")
+- "検索バーをクリックしてmusicと入力してEnter" -> click(x=540, y=102), wait(seconds=0.5), type_text(text="music"), key_press(keys="Return")
+- "Google検索してネコ" -> open_url(url="https://www.google.com/search?q=ネコ"), wait(seconds=2)
+- "Chromeを開いて" -> open_app(app_name="chrome"), wait(seconds=2)
 - "画面の中央をクリック" -> click(x=640, y=360)
 - "Hello Worldと入力して" -> type_text(text="Hello World")
-- "全選択してコピー" -> select_all() -> copy()
+- "全選択してコピー" -> select_all(), copy()
 - "ファイルをゴミ箱にドラッグして" -> drag(start_x=..., start_y=..., end_x=..., end_y=...)
 - "ページを更新" -> refresh_page()
 - "新しいタブ" -> new_tab()
@@ -444,7 +448,9 @@ Examples:
 - "前のページに戻って" -> go_back()
 - "ズームイン" -> zoom_in()
 - "ウィンドウ切り替え" -> switch_window()
-"""
+- "YouTubeで音楽を再生" -> open_url(url="https://www.youtube.com"), wait(seconds=3), click(x=540, y=102), type_text(text="music"), key_press(keys="Return"), wait(seconds=3), click(x=500, y=300)
+
+Remember: ALWAYS return ALL steps in a SINGLE response. Never return just one step when more are needed."""
 
 VISION_SYSTEM_PROMPT = """You are Soalin, an AI that controls a PC by analyzing screenshots. Look at the screenshot and determine what actions to take.
 
@@ -675,22 +681,42 @@ class LLMParser:
             messages.insert(0, {"role": "user", "content": "..."})
 
         try:
-            response = await self._anthropic.messages.create(
-                model=self._claude_model,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-                tools=_anthropic_tools(),
-                max_tokens=2048,
-                temperature=0.1,
-            )
+            all_commands = []
+            max_turns = 5
 
-            commands = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    cmd = {"action": block.name, **block.input}
-                    commands.append(cmd)
+            for turn in range(max_turns):
+                response = await self._anthropic.messages.create(
+                    model=self._claude_model,
+                    system=SYSTEM_PROMPT,
+                    messages=messages,
+                    tools=_anthropic_tools(),
+                    max_tokens=2048,
+                    temperature=0.1,
+                )
 
-            return commands
+                tool_uses = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        cmd = {"action": block.name, **block.input}
+                        all_commands.append(cmd)
+                        tool_uses.append(block)
+
+                if response.stop_reason != "tool_use" or not tool_uses:
+                    break
+
+                assistant_content = response.content
+                messages.append({"role": "assistant", "content": assistant_content})
+
+                tool_results = []
+                for tu in tool_uses:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tu.id,
+                        "content": json.dumps({"success": True, "description": f"Queued: {tu.name}"}),
+                    })
+                messages.append({"role": "user", "content": tool_results})
+
+            return all_commands
         except Exception as e:
             print(f"Claude parse error: {e}")
             return []
