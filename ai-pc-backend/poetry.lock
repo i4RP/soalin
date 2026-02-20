@@ -23,6 +23,32 @@ files = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.83.0"
+description = "The official Python library for the anthropic API"
+optional = false
+python-versions = ">=3.9"
+files = [
+    {file = "anthropic-0.83.0-py3-none-any.whl", hash = "sha256:f069ef508c73b8f9152e8850830d92bd5ef185645dbacf234bb213344a274810"},
+    {file = "anthropic-0.83.0.tar.gz", hash = "sha256:a8732c68b41869266c3034541a31a29d8be0f8cd0a714f9edce3128b351eceb4"},
+]
+
+[package.dependencies]
+anyio = ">=3.5.0,<5"
+distro = ">=1.7.0,<2"
+docstring-parser = ">=0.15,<1"
+httpx = ">=0.25.0,<1"
+jiter = ">=0.4.0,<1"
+pydantic = ">=1.9.0,<3"
+sniffio = "*"
+typing-extensions = ">=4.10,<5"
+
+[package.extras]
+aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9)"]
+bedrock = ["boto3 (>=1.28.57)", "botocore (>=1.31.57)"]
+vertex = ["google-auth[requests] (>=2,<3)"]
+
+[[package]]
 name = "anyio"
 version = "4.12.1"
 description = "High-level concurrency and networking framework on top of asyncio or Trio"
@@ -106,6 +132,22 @@ doq = ["aioquic (>=1.2.0)"]
 idna = ["idna (>=3.10)"]
 trio = ["trio (>=0.30)"]
 wmi = ["wmi (>=1.5.1)"]
+
+[[package]]
+name = "docstring-parser"
+version = "0.17.0"
+description = "Parse Python docstrings in reST, Google and Numpydoc format"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "docstring_parser-0.17.0-py3-none-any.whl", hash = "sha256:cf2569abd23dce8099b300f9b4fa8191e9582dda731fd533daf54c4551658708"},
+    {file = "docstring_parser-0.17.0.tar.gz", hash = "sha256:583de4a309722b3315439bb31d64ba3eebada841f2e2cee23b99df001434c912"},
+]
+
+[package.extras]
+dev = ["pre-commit (>=2.16.0)", "pydoctor (>=25.4.0)", "pytest"]
+docs = ["pydoctor (>=25.4.0)"]
+test = ["pytest"]
 
 [[package]]
 name = "email-validator"
@@ -2186,4 +2228,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "ec35c2dbf946a5d867cfb16700f53a5f6a34c7049f20d27f96490e9c1bab51b9"
+content-hash = "8e06dd5d44395b0ce548d556ff8396df6c89ea0c9bc12e8d04ad8b80a5fe4807"

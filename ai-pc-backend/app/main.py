@@ -107,6 +107,8 @@ class ActionRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+    anthropic_api_key: str = ""
+    claude_model: str = "claude-sonnet-4-20250514"
     vision_enabled: bool = True
 
 
@@ -214,9 +216,19 @@ async def update_settings(settings: SettingsUpdate):
     if llm_parser is None:
         return JSONResponse(status_code=503, content={"error": "LLM parser not initialized"})
 
-    if settings.openai_api_key:
-        llm_parser.configure(settings.openai_api_key, settings.openai_model)
-        return {"status": "ok", "llm_enabled": True, "model": settings.openai_model}
+    if settings.openai_api_key or settings.anthropic_api_key:
+        llm_parser.configure(
+            openai_api_key=settings.openai_api_key,
+            openai_model=settings.openai_model,
+            anthropic_api_key=settings.anthropic_api_key,
+            claude_model=settings.claude_model,
+        )
+        return {
+            "status": "ok",
+            "llm_enabled": True,
+            "mode": llm_parser.mode,
+            "model": llm_parser.model,
+        }
     else:
         llm_parser.disable()
         return {"status": "ok", "llm_enabled": False}
@@ -226,8 +238,33 @@ async def update_settings(settings: SettingsUpdate):
 async def get_settings():
     return {
         "llm_enabled": llm_parser is not None and llm_parser.is_available,
-        "model": llm_parser._model if llm_parser else "gpt-4o-mini",
+        "mode": llm_parser.mode if llm_parser else "none",
+        "model": llm_parser.model if llm_parser else "none",
     }
+
+
+async def _execute_commands(commands: list[dict], session_id: str, use_agent: bool) -> tuple[list[dict], str]:
+    results = []
+    img_base64 = ""
+    if use_agent and agent_relay:
+        for cmd in commands:
+            result = await agent_relay.send_command(session_id, cmd)
+            if result:
+                results.append(result)
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)
+        agent_conn = agent_relay.get_agent(session_id)
+        img_base64 = agent_conn.last_screen if agent_conn else ""
+    else:
+        if pc_controller is None or screen_capture is None:
+            return results, img_base64
+        for cmd in commands:
+            result = pc_controller.execute(cmd)
+            results.append(result)
+            await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
+        img_base64 = screen_capture.capture_base64()
+    return results, img_base64
 
 
 @app.post("/api/chat")
@@ -247,38 +284,32 @@ async def chat(msg: ChatMessage):
     context = session.chat_history[-10:] if session else None
     commands: list[dict] = []
     used_llm = False
+    provider_used = ""
 
     if llm_parser and llm_parser.is_available:
         commands = await llm_parser.parse(msg.message, context)
         if commands:
             used_llm = True
+            provider_used = "claude" if llm_parser.mode in ("dual", "claude") else "openai"
 
     if not commands:
         commands = ai_parser.parse(msg.message)
 
-    results = []
-    if use_agent and agent_relay:
-        for cmd in commands:
-            result = await agent_relay.send_command(msg.session_id, cmd)
-            if result:
-                results.append(result)
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
-        agent_conn = agent_relay.get_agent(msg.session_id)
-        img_base64 = agent_conn.last_screen if agent_conn else ""
-    else:
-        if pc_controller is None or screen_capture is None:
-            return JSONResponse(status_code=503, content={"error": "System not initialized"})
-        for cmd in commands:
-            result = pc_controller.execute(cmd)
-            results.append(result)
-            await asyncio.sleep(0.3)
-        await asyncio.sleep(0.5)
-        img_base64 = screen_capture.capture_base64()
+    results, img_base64 = await _execute_commands(commands, msg.session_id, use_agent)
+
+    any_failed = any(not r.get("success", False) for r in results)
+    consulted_gpt4o = False
+
+    if used_llm and any_failed and llm_parser and llm_parser.mode == "dual":
+        retry_commands = await llm_parser.consult_gpt4o(msg.message, commands, results)
+        if retry_commands:
+            consulted_gpt4o = True
+            provider_used = "claude+gpt4o"
+            results, img_base64 = await _execute_commands(retry_commands, msg.session_id, use_agent)
 
     reply = ""
     if used_llm and llm_parser:
-        reply = await llm_parser.generate_reply(msg.message, results)
+        reply = await llm_parser.generate_reply(msg.message, results, provider_used)
     if not reply:
         reply = ai_parser.generate_reply(msg.message, results)
 
@@ -291,6 +322,8 @@ async def chat(msg: ChatMessage):
         "screenshot": img_base64,
         "timestamp": time.time(),
         "used_llm": used_llm,
+        "provider": provider_used,
+        "consulted_gpt4o": consulted_gpt4o,
         "source": "remote_mac" if use_agent else "virtual_desktop",
     }
 
