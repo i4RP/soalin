@@ -127,16 +127,21 @@ async def healthz():
 
 @app.get("/api/screenshot")
 async def get_screenshot(session_id: str = ""):
-    if session_id and agent_relay and agent_relay.has_agent(session_id):
+    agent_conn = None
+    if session_id and agent_relay:
         agent_conn = agent_relay.get_agent(session_id)
-        if agent_conn and agent_conn.last_screen:
-            return {
-                "image": agent_conn.last_screen,
-                "width": agent_conn.screen_width,
-                "height": agent_conn.screen_height,
-                "timestamp": agent_conn.last_screen_time,
-                "source": "remote_mac",
-            }
+        if not agent_conn and session_manager:
+            session = session_manager.get_session(session_id)
+            if session:
+                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
+    if agent_conn and agent_conn.last_screen:
+        return {
+            "image": agent_conn.last_screen,
+            "width": agent_conn.screen_width,
+            "height": agent_conn.screen_height,
+            "timestamp": agent_conn.last_screen_time,
+            "source": "remote_mac",
+        }
     if screen_capture is None:
         return JSONResponse(status_code=503, content={"error": "Screen capture not initialized"})
     img_base64 = screen_capture.capture_base64()
@@ -274,12 +279,19 @@ async def chat(msg: ChatMessage):
 
     session = None
     use_agent = False
+    agent_session_id = msg.session_id
     if msg.session_id and session_manager:
         session = session_manager.get_session(msg.session_id)
         if session:
             session.add_message("user", msg.message)
-        if agent_relay and agent_relay.has_agent(msg.session_id):
-            use_agent = True
+        if agent_relay:
+            if agent_relay.has_agent(msg.session_id):
+                use_agent = True
+            elif session:
+                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
+                if agent_conn:
+                    use_agent = True
+                    agent_session_id = agent_conn.session_id
 
     context = session.chat_history[-10:] if session else None
     commands: list[dict] = []
@@ -295,7 +307,7 @@ async def chat(msg: ChatMessage):
     if not commands:
         commands = ai_parser.parse(msg.message)
 
-    results, img_base64 = await _execute_commands(commands, msg.session_id, use_agent)
+    results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
 
     any_failed = any(not r.get("success", False) for r in results)
     consulted_gpt4o = False
@@ -305,7 +317,7 @@ async def chat(msg: ChatMessage):
         if retry_commands:
             consulted_gpt4o = True
             provider_used = "claude+gpt4o"
-            results, img_base64 = await _execute_commands(retry_commands, msg.session_id, use_agent)
+            results, img_base64 = await _execute_commands(retry_commands, agent_session_id, use_agent)
 
     reply = ""
     if used_llm and llm_parser:
@@ -466,6 +478,11 @@ async def agent_status(session_id: str = ""):
         return {"connected": False, "active_agents": 0}
     if session_id:
         has = agent_relay.has_agent(session_id)
+        if not has and session_manager:
+            session = session_manager.get_session(session_id)
+            if session:
+                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
+                has = agent_conn is not None
         return {"connected": has, "active_agents": agent_relay.active_agents, "session_id": session_id}
     return {"connected": False, "active_agents": agent_relay.active_agents}
 

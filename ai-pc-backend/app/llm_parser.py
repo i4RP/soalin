@@ -434,8 +434,7 @@ IMPORTANT RULES:
 
 Examples (ALL tools called in ONE response):
 - "YouTube開いて" -> open_url(url="https://www.youtube.com"), wait(seconds=2)
-- "YouTubeで猫を検索" -> open_url(url="https://www.youtube.com"), wait(seconds=3), click(x=540, y=102), type_text(text="猫"), key_press(keys="Return")
-- "検索バーをクリックしてmusicと入力してEnter" -> click(x=540, y=102), wait(seconds=0.5), type_text(text="music"), key_press(keys="Return")
+- "YouTubeで猫を検索" -> open_url(url="https://www.youtube.com/results?search_query=猫"), wait(seconds=3)
 - "Google検索してネコ" -> open_url(url="https://www.google.com/search?q=ネコ"), wait(seconds=2)
 - "Chromeを開いて" -> open_app(app_name="chrome"), wait(seconds=2)
 - "画面の中央をクリック" -> click(x=640, y=360)
@@ -448,7 +447,7 @@ Examples (ALL tools called in ONE response):
 - "前のページに戻って" -> go_back()
 - "ズームイン" -> zoom_in()
 - "ウィンドウ切り替え" -> switch_window()
-- "YouTubeで音楽を再生" -> open_url(url="https://www.youtube.com"), wait(seconds=3), click(x=540, y=102), type_text(text="music"), key_press(keys="Return"), wait(seconds=3), click(x=500, y=300)
+- "YouTubeで音楽を再生" -> open_url(url="https://www.youtube.com/results?search_query=music"), wait(seconds=3), click(x=480, y=340)
 
 Remember: ALWAYS return ALL steps in a SINGLE response. Never return just one step when more are needed."""
 

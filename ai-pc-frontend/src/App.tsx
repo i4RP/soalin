@@ -565,7 +565,7 @@ function App() {
 
         {screenshot ? (
           <img
-            src={`data:image/png;base64,${screenshot}`}
+            src={`data:image/${screenshot.startsWith('/9j/') ? 'jpeg' : 'png'};base64,${screenshot}`}
             alt="PC Screen"
             className="w-full h-full object-contain cursor-crosshair"
             onClick={handleScreenClick}
