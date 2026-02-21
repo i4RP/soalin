@@ -25,9 +25,11 @@ function parseApiUrl(raw: string): { url: string; headers: Record<string, string
 
 const { url: API_URL, headers: AUTH_HEADERS, wsUrl: WS_URL } = parseApiUrl(RAW_API_URL)
 
-function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  const merged = { ...init, headers: { ...AUTH_HEADERS, ...(init?.headers || {}) } }
-  return fetch(`${API_URL}${path}`, merged)
+function apiFetch(path: string, init?: RequestInit, timeoutMs = 300000): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const merged = { ...init, headers: { ...AUTH_HEADERS, ...(init?.headers || {}) }, signal: controller.signal }
+  return fetch(`${API_URL}${path}`, merged).finally(() => clearTimeout(timer))
 }
 
 interface ChatEntry {
