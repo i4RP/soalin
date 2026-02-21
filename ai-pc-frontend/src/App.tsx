@@ -3,7 +3,32 @@ import './App.css'
 
 const isMobile = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const RAW_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+function parseApiUrl(raw: string): { url: string; headers: Record<string, string>; wsUrl: string } {
+  try {
+    const u = new URL(raw)
+    if (u.username) {
+      const auth = btoa(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`)
+      u.username = ''
+      u.password = ''
+      const clean = u.toString().replace(/\/$/, '')
+      const ws = clean.replace(/^http/, 'ws')
+      return { url: clean, headers: { 'Authorization': `Basic ${auth}` }, wsUrl: ws }
+    }
+    const clean = u.toString().replace(/\/$/, '')
+    return { url: clean, headers: {}, wsUrl: clean.replace(/^http/, 'ws') }
+  } catch {
+    return { url: raw, headers: {}, wsUrl: raw.replace(/^http/, 'ws') }
+  }
+}
+
+const { url: API_URL, headers: AUTH_HEADERS, wsUrl: WS_URL } = parseApiUrl(RAW_API_URL)
+
+function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const merged = { ...init, headers: { ...AUTH_HEADERS, ...(init?.headers || {}) } }
+  return fetch(`${API_URL}${path}`, merged)
+}
 
 interface ChatEntry {
   role: 'user' | 'assistant' | 'system'
@@ -67,7 +92,7 @@ function App() {
     const params = new URLSearchParams(window.location.search)
     const urlCode = params.get('code')
     if (urlCode) {
-      fetch(`${API_URL}/api/session/connect`, {
+      apiFetch('/api/session/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: urlCode.trim() }),
@@ -95,7 +120,7 @@ function App() {
   }, [sessionId, connectionCode])
 
   useEffect(() => {
-    fetch(`${API_URL}/api/settings`).then(r => r.json()).then(d => {
+    apiFetch('/api/settings').then(r => r.json()).then(d => {
       setLlmEnabled(d.llm_enabled)
       if (d.mode) setLlmMode(d.mode)
     }).catch(() => {})
@@ -105,8 +130,7 @@ function App() {
     if (wsRef.current) {
       wsRef.current.close()
     }
-    const wsUrl = API_URL.replace(/^http/, 'ws')
-    const ws = new WebSocket(`${wsUrl}/ws/screen`)
+    const ws = new WebSocket(`${WS_URL}/ws/screen`)
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
@@ -124,7 +148,7 @@ function App() {
   const checkAgentStatus = useCallback(async () => {
     if (!sessionId) return
     try {
-      const res = await fetch(`${API_URL}/api/agent/status?session_id=${sessionId}`)
+      const res = await apiFetch(`/api/agent/status?session_id=${sessionId}`)
       if (res.ok) {
         const data = await res.json()
         setAgentConnected(data.connected)
@@ -142,10 +166,10 @@ function App() {
 
   const fetchScreenshot = useCallback(async () => {
     try {
-      const url = sessionId
-        ? `${API_URL}/api/screenshot?session_id=${sessionId}`
-        : `${API_URL}/api/screenshot`
-      const res = await fetch(url)
+      const path = sessionId
+        ? `/api/screenshot?session_id=${sessionId}`
+        : `/api/screenshot`
+      const res = await apiFetch(path)
       if (res.ok) {
         const data = await res.json()
         setScreenshot(data.image)
@@ -172,7 +196,7 @@ function App() {
 
   const createSession = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/session/create`, {
+      const res = await apiFetch('/api/session/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: '' }),
@@ -188,7 +212,7 @@ function App() {
   const connectWithCode = async () => {
     if (!codeInput.trim()) return
     try {
-      const res = await fetch(`${API_URL}/api/session/connect`, {
+      const res = await apiFetch('/api/session/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: codeInput.trim() }),
@@ -205,7 +229,7 @@ function App() {
 
   const saveSettings = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/settings`, {
+      const res = await apiFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -228,7 +252,7 @@ function App() {
     setChatMessages(prev => [...prev, { role: 'user', content: message, timestamp: Date.now() }])
     setIsLoading(true)
     try {
-      const res = await fetch(`${API_URL}/api/chat`, {
+      const res = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, session_id: sessionId }),
@@ -382,7 +406,7 @@ function App() {
               {llmEnabled && (
                 <button
                   onClick={async () => {
-                    await fetch(`${API_URL}/api/settings`, {
+                    await apiFetch('/api/settings', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ openai_api_key: '', anthropic_api_key: '' }),
