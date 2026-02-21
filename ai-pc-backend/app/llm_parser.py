@@ -400,15 +400,39 @@ TOOL_DEFS = [
     },
 ]
 
+TASK_COMPLETE_TOOL = {
+    "name": "task_complete",
+    "description": "Signal that the user's task is complete (or cannot be completed). Call this when the goal is achieved or you are stuck.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "success": {"type": "boolean", "description": "True if the task was completed successfully"},
+            "reason": {"type": "string", "description": "Brief description of what was accomplished or why it failed"},
+        },
+        "required": ["success", "reason"],
+    },
+}
+
 
 def _openai_tools() -> list[dict]:
     return [{"type": "function", "function": t} for t in TOOL_DEFS]
+
+
+def _openai_autonomous_tools() -> list[dict]:
+    return [{"type": "function", "function": t} for t in TOOL_DEFS + [TASK_COMPLETE_TOOL]]
 
 
 def _anthropic_tools() -> list[dict]:
     return [
         {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
         for t in TOOL_DEFS
+    ]
+
+
+def _anthropic_autonomous_tools() -> list[dict]:
+    return [
+        {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
+        for t in TOOL_DEFS + [TASK_COMPLETE_TOOL]
     ]
 
 
@@ -462,6 +486,36 @@ When analyzing the screen:
 - Look at the current state to determine what has already been done and what's next.
 - If a page is still loading, use wait() before interacting.
 """
+
+AUTONOMOUS_VISION_PROMPT = """You are Soalin, an AI that controls a PC step-by-step using screenshots.
+
+Screen resolution: 1280x720. You MUST look at the screenshot carefully to determine exact coordinates of UI elements.
+
+TASK: "{user_goal}"
+
+PREVIOUS ACTIONS TAKEN:
+{action_history}
+
+INSTRUCTIONS:
+1. Look at the current screenshot carefully.
+2. Determine what state the screen is in right now.
+3. Decide the NEXT action(s) to get closer to completing the task.
+4. If the task is ALREADY COMPLETE (e.g. the target page is loaded, the video is playing, the desired result is visible), call task_complete instead of performing more actions.
+
+COORDINATE RULES:
+- Look at the ACTUAL screenshot to find element positions. Do NOT guess coordinates.
+- The search bar on YouTube is typically around y=187 (top area).
+- Video thumbnails in search results start around y=300-400.
+- The Chrome address bar is around y=83.
+- Always verify positions by looking at the screenshot.
+
+IMPORTANT:
+- Call task_complete(success=true, reason="...") when the goal is achieved.
+- Call task_complete(success=false, reason="...") if you are stuck and cannot proceed.
+- For opening URLs, prefer open_url over click-and-type in address bar.
+- After open_url or open_app, always add wait(seconds=2) to let the page load.
+- Return only 1-3 actions per step. Do NOT try to do everything at once.
+- Each step will show you a new screenshot after actions execute."""
 
 GPT4O_ADVISOR_PROMPT = """You are a senior advisor AI for Soalin, a PC-control assistant. The primary AI (Claude) attempted an action plan but it FAILED. You need to analyze what went wrong and propose a BETTER plan.
 
@@ -879,3 +933,148 @@ If GPT-4o was consulted after Claude's failure, mention that."""
             return ""
         except Exception:
             return ""
+
+    async def autonomous_step(
+        self,
+        user_goal: str,
+        screenshot_b64: str,
+        action_history: list[dict],
+    ) -> dict:
+        history_text = "None yet" if not action_history else json.dumps(action_history, ensure_ascii=False)
+        system = AUTONOMOUS_VISION_PROMPT.format(
+            user_goal=user_goal,
+            action_history=history_text,
+        )
+
+        if self._anthropic:
+            result = await self._autonomous_step_claude(system, screenshot_b64)
+            if result:
+                return result
+
+        if self._openai:
+            result = await self._autonomous_step_openai(system, screenshot_b64)
+            if result:
+                return result
+
+        return {"commands": [], "task_complete": False, "complete_reason": ""}
+
+    async def _autonomous_step_claude(self, system: str, screenshot_b64: str) -> dict:
+        if not self._anthropic:
+            return {}
+
+        media_type = "image/jpeg" if screenshot_b64.startswith("/9j/") else "image/png"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": screenshot_b64,
+                        },
+                    },
+                    {"type": "text", "text": "Look at this screenshot and decide the next action(s)."},
+                ],
+            }
+        ]
+
+        try:
+            commands = []
+            task_done = False
+            complete_reason = ""
+            max_turns = 3
+
+            for _turn in range(max_turns):
+                response = await self._anthropic.messages.create(
+                    model=self._claude_model,
+                    system=system,
+                    messages=messages,
+                    tools=_anthropic_autonomous_tools(),
+                    max_tokens=2048,
+                    temperature=0.1,
+                )
+
+                tool_uses = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        if block.name == "task_complete":
+                            task_done = True
+                            complete_reason = block.input.get("reason", "")
+                        else:
+                            commands.append({"action": block.name, **block.input})
+                            tool_uses.append(block)
+
+                if task_done or response.stop_reason != "tool_use" or not tool_uses:
+                    break
+
+                messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+                for tu in tool_uses:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tu.id,
+                        "content": json.dumps({"success": True, "description": f"Queued: {tu.name}"}),
+                    })
+                messages.append({"role": "user", "content": tool_results})
+
+            return {"commands": commands, "task_complete": task_done, "complete_reason": complete_reason}
+        except Exception as e:
+            print(f"Claude autonomous step error: {e}")
+            return {}
+
+    async def _autonomous_step_openai(self, system: str, screenshot_b64: str) -> dict:
+        if not self._openai:
+            return {}
+
+        img_format = "jpeg" if screenshot_b64.startswith("/9j/") else "png"
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Look at this screenshot and decide the next action(s)."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/{img_format};base64,{screenshot_b64}",
+                            "detail": "low",
+                        },
+                    },
+                ],
+            },
+        ]
+
+        try:
+            response = await self._openai.chat.completions.create(
+                model=self._openai_model,
+                messages=messages,
+                tools=_openai_autonomous_tools(),
+                tool_choice="auto",
+                temperature=0.1,
+                max_tokens=2048,
+            )
+
+            msg = response.choices[0].message
+            commands = []
+            task_done = False
+            complete_reason = ""
+
+            if msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    fn_name = tool_call.function.name
+                    try:
+                        fn_args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        fn_args = {}
+                    if fn_name == "task_complete":
+                        task_done = True
+                        complete_reason = fn_args.get("reason", "")
+                    elif fn_name in VALID_ACTIONS:
+                        commands.append({"action": fn_name, **fn_args})
+
+            return {"commands": commands, "task_complete": task_done, "complete_reason": complete_reason}
+        except Exception as e:
+            print(f"GPT-4o autonomous step error: {e}")
+            return {}

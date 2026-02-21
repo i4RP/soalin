@@ -272,70 +272,126 @@ async def _execute_commands(commands: list[dict], session_id: str, use_agent: bo
     return results, img_base64
 
 
+def _resolve_agent(frontend_session_id: str) -> tuple[bool, str]:
+    use_agent = False
+    agent_session_id = frontend_session_id
+    if frontend_session_id and agent_relay:
+        if agent_relay.has_agent(frontend_session_id):
+            use_agent = True
+        elif session_manager:
+            session = session_manager.get_session(frontend_session_id)
+            if session:
+                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
+                if agent_conn:
+                    use_agent = True
+                    agent_session_id = agent_conn.session_id
+    return use_agent, agent_session_id
+
+
+async def _get_screenshot(agent_session_id: str, use_agent: bool) -> str:
+    if use_agent and agent_relay:
+        agent_conn = agent_relay.get_agent(agent_session_id)
+        if agent_conn and agent_conn.last_screen:
+            return agent_conn.last_screen
+    if screen_capture:
+        return screen_capture.capture_base64()
+    return ""
+
+
+MAX_AUTONOMOUS_STEPS = 7
+
+
 @app.post("/api/chat")
 async def chat(msg: ChatMessage):
     if ai_parser is None:
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
 
     session = None
-    use_agent = False
-    agent_session_id = msg.session_id
     if msg.session_id and session_manager:
         session = session_manager.get_session(msg.session_id)
         if session:
             session.add_message("user", msg.message)
-        if agent_relay:
-            if agent_relay.has_agent(msg.session_id):
-                use_agent = True
-            elif session:
-                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
-                if agent_conn:
-                    use_agent = True
-                    agent_session_id = agent_conn.session_id
 
-    context = session.chat_history[-10:] if session else None
-    commands: list[dict] = []
+    use_agent, agent_session_id = _resolve_agent(msg.session_id)
+
+    all_results: list[dict] = []
+    all_actions: list[dict] = []
+    img_base64 = ""
     used_llm = False
     provider_used = ""
+    autonomous_steps = 0
 
     if llm_parser and llm_parser.is_available:
-        commands = await llm_parser.parse(msg.message, context)
-        if commands:
-            used_llm = True
+        screenshot = await _get_screenshot(agent_session_id, use_agent)
+
+        if screenshot:
             provider_used = "claude" if llm_parser.mode in ("dual", "claude") else "openai"
+            used_llm = True
 
-    if not commands:
+            for step in range(MAX_AUTONOMOUS_STEPS):
+                autonomous_steps += 1
+                step_result = await llm_parser.autonomous_step(
+                    msg.message, screenshot, all_actions,
+                )
+
+                commands = step_result.get("commands", [])
+                task_complete = step_result.get("task_complete", False)
+                complete_reason = step_result.get("complete_reason", "")
+
+                if not commands and task_complete:
+                    print(f"[autonomous] step {step+1}: task_complete -> {complete_reason}")
+                    break
+
+                if not commands:
+                    print(f"[autonomous] step {step+1}: no commands returned, stopping")
+                    break
+
+                print(f"[autonomous] step {step+1}: executing {len(commands)} command(s)")
+                results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
+                all_results.extend(results)
+                for cmd, res in zip(commands, results):
+                    all_actions.append({**cmd, "result": res.get("description", "")})
+
+                if task_complete:
+                    print(f"[autonomous] step {step+1}: task_complete after actions -> {complete_reason}")
+                    break
+
+                await asyncio.sleep(1.0)
+                screenshot = await _get_screenshot(agent_session_id, use_agent)
+                if not screenshot:
+                    break
+        else:
+            context = session.chat_history[-10:] if session else None
+            commands = await llm_parser.parse(msg.message, context)
+            if commands:
+                used_llm = True
+                provider_used = "claude" if llm_parser.mode in ("dual", "claude") else "openai"
+                all_results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
+
+    if not used_llm:
         commands = ai_parser.parse(msg.message)
+        all_results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
 
-    results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
-
-    any_failed = any(not r.get("success", False) for r in results)
-    consulted_gpt4o = False
-
-    if used_llm and any_failed and llm_parser and llm_parser.mode == "dual":
-        retry_commands = await llm_parser.consult_gpt4o(msg.message, commands, results)
-        if retry_commands:
-            consulted_gpt4o = True
-            provider_used = "claude+gpt4o"
-            results, img_base64 = await _execute_commands(retry_commands, agent_session_id, use_agent)
+    if not img_base64:
+        img_base64 = await _get_screenshot(agent_session_id, use_agent)
 
     reply = ""
     if used_llm and llm_parser:
-        reply = await llm_parser.generate_reply(msg.message, results, provider_used)
+        reply = await llm_parser.generate_reply(msg.message, all_results, provider_used)
     if not reply:
-        reply = ai_parser.generate_reply(msg.message, results)
+        reply = ai_parser.generate_reply(msg.message, all_results)
 
     if session:
         session.add_message("assistant", reply)
 
     return {
         "reply": reply,
-        "actions": results,
+        "actions": all_results,
         "screenshot": img_base64,
         "timestamp": time.time(),
         "used_llm": used_llm,
         "provider": provider_used,
-        "consulted_gpt4o": consulted_gpt4o,
+        "autonomous_steps": autonomous_steps,
         "source": "remote_mac" if use_agent else "virtual_desktop",
     }
 
