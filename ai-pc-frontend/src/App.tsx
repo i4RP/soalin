@@ -28,8 +28,11 @@ function App() {
   const [connectionCode, setConnectionCode] = useState<string>('')
   const [codeInput, setCodeInput] = useState('')
   const [llmEnabled, setLlmEnabled] = useState(false)
+  const [llmMode, setLlmMode] = useState('none')
   const [apiKeyInput, setApiKeyInput] = useState('')
-  const [modelSelect, setModelSelect] = useState('gpt-4o-mini')
+  const [anthropicKeyInput, setAnthropicKeyInput] = useState('')
+  const [modelSelect, setModelSelect] = useState('gpt-4o')
+  const [claudeModelSelect, setClaudeModelSelect] = useState('claude-sonnet-4-20250514')
   const [screenHeight, setScreenHeight] = useState(45)
   const [useWebSocket, setUseWebSocket] = useState(false)
   const [agentConnected, setAgentConnected] = useState(false)
@@ -94,7 +97,7 @@ function App() {
   useEffect(() => {
     fetch(`${API_URL}/api/settings`).then(r => r.json()).then(d => {
       setLlmEnabled(d.llm_enabled)
-      if (d.model) setModelSelect(d.model)
+      if (d.mode) setLlmMode(d.mode)
     }).catch(() => {})
   }, [])
 
@@ -205,11 +208,17 @@ function App() {
       const res = await fetch(`${API_URL}/api/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ openai_api_key: apiKeyInput, openai_model: modelSelect }),
+        body: JSON.stringify({
+          openai_api_key: apiKeyInput,
+          openai_model: modelSelect,
+          anthropic_api_key: anthropicKeyInput,
+          claude_model: claudeModelSelect,
+        }),
       })
       if (res.ok) {
         const data = await res.json()
         setLlmEnabled(data.llm_enabled)
+        if (data.mode) setLlmMode(data.mode)
         setCurrentView('main')
       }
     } catch { /* ignore */ }
@@ -313,16 +322,37 @@ function App() {
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           <div>
-            <h3 className="text-xs font-semibold text-gray-400 uppercase mb-3">AI Engine (LLM)</h3>
+            <h3 className="text-xs font-semibold text-gray-400 uppercase mb-3">AI Engine (Dual LLM)</h3>
             <div className="bg-gray-800 rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm">Status</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${llmEnabled ? 'bg-green-900 text-green-300' : 'bg-gray-700 text-gray-400'}`}>
-                  {llmEnabled ? 'LLM Active' : 'Regex Mode'}
+                <span className={`text-xs px-2 py-0.5 rounded-full ${llmEnabled ? (llmMode === 'dual' ? 'bg-purple-900 text-purple-300' : 'bg-green-900 text-green-300') : 'bg-gray-700 text-gray-400'}`}>
+                  {llmEnabled ? (llmMode === 'dual' ? 'Dual AI' : llmMode === 'claude' ? 'Claude' : 'GPT-4o') : 'Regex Mode'}
                 </span>
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">OpenAI API Key</label>
+                <label className="text-xs text-gray-400 block mb-1">Anthropic API Key (Primary)</label>
+                <input
+                  type="password"
+                  value={anthropicKeyInput}
+                  onChange={e => setAnthropicKeyInput(e.target.value)}
+                  placeholder="sk-ant-..."
+                  className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Claude Model</label>
+                <select
+                  value={claudeModelSelect}
+                  onChange={e => setClaudeModelSelect(e.target.value)}
+                  className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                  <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                </select>
+              </div>
+              <div className="border-t border-gray-700 pt-3">
+                <label className="text-xs text-gray-400 block mb-1">OpenAI API Key (Advisor)</label>
                 <input
                   type="password"
                   value={apiKeyInput}
@@ -332,16 +362,15 @@ function App() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Model</label>
+                <label className="text-xs text-gray-400 block mb-1">GPT Model</label>
                 <select
                   value={modelSelect}
                   onChange={e => setModelSelect(e.target.value)}
                   className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
                 >
-                  <option value="gpt-4o-mini">GPT-4o Mini (Fast)</option>
-                  <option value="gpt-4o">GPT-4o (Powerful)</option>
+                  <option value="gpt-4o">GPT-4o</option>
+                  <option value="gpt-4o-mini">GPT-4o Mini</option>
                   <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                  <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Budget)</option>
                 </select>
               </div>
               <button
@@ -356,10 +385,12 @@ function App() {
                     await fetch(`${API_URL}/api/settings`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ openai_api_key: '', openai_model: modelSelect }),
+                      body: JSON.stringify({ openai_api_key: '', anthropic_api_key: '' }),
                     })
                     setLlmEnabled(false)
+                    setLlmMode('none')
                     setApiKeyInput('')
+                    setAnthropicKeyInput('')
                   }}
                   className="w-full py-2 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600 transition-colors"
                 >
@@ -367,8 +398,7 @@ function App() {
                 </button>
               )}
               <p className="text-xs text-gray-500">
-                LLM mode enables complex multi-step instructions like "open browser and search for weather".
-                Without LLM, regex-based parsing handles basic commands.
+                Dual AI: Claude generates actions, GPT-4o advises on failures. Both keys = maximum performance.
               </p>
             </div>
           </div>
@@ -505,7 +535,7 @@ function App() {
           <div>
             <h3 className="text-xs font-semibold text-gray-400 uppercase mb-3">About</h3>
             <div className="bg-gray-800 rounded-lg p-4">
-              <p className="text-sm text-gray-300">Soalin v3.0</p>
+              <p className="text-sm text-gray-300">Soalin v4.0</p>
               <p className="text-xs text-gray-500 mt-1">Chat to control your PC with AI-powered natural language</p>
             </div>
           </div>
@@ -525,7 +555,7 @@ function App() {
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>
           {agentConnected && <span className="text-xs px-1.5 py-0.5 bg-green-900 text-green-300 rounded">PC</span>}
-          {llmEnabled && <span className="text-xs px-1.5 py-0.5 bg-purple-900 text-purple-300 rounded">LLM</span>}
+          {llmEnabled && <span className="text-xs px-1.5 py-0.5 bg-purple-900 text-purple-300 rounded">{llmMode === 'dual' ? 'Dual AI' : llmMode === 'claude' ? 'Claude' : 'LLM'}</span>}
         </div>
         {connectionCode && (
           <div className="absolute top-2 right-2 z-10">
@@ -535,7 +565,7 @@ function App() {
 
         {screenshot ? (
           <img
-            src={`data:image/png;base64,${screenshot}`}
+            src={`data:image/${screenshot.startsWith('/9j/') ? 'jpeg' : 'png'};base64,${screenshot}`}
             alt="PC Screen"
             className="w-full h-full object-contain cursor-crosshair"
             onClick={handleScreenClick}

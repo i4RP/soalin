@@ -107,6 +107,8 @@ class ActionRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+    anthropic_api_key: str = ""
+    claude_model: str = "claude-sonnet-4-20250514"
     vision_enabled: bool = True
 
 
@@ -125,16 +127,21 @@ async def healthz():
 
 @app.get("/api/screenshot")
 async def get_screenshot(session_id: str = ""):
-    if session_id and agent_relay and agent_relay.has_agent(session_id):
+    agent_conn = None
+    if session_id and agent_relay:
         agent_conn = agent_relay.get_agent(session_id)
-        if agent_conn and agent_conn.last_screen:
-            return {
-                "image": agent_conn.last_screen,
-                "width": agent_conn.screen_width,
-                "height": agent_conn.screen_height,
-                "timestamp": agent_conn.last_screen_time,
-                "source": "remote_mac",
-            }
+        if not agent_conn and session_manager:
+            session = session_manager.get_session(session_id)
+            if session:
+                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
+    if agent_conn and agent_conn.last_screen:
+        return {
+            "image": agent_conn.last_screen,
+            "width": agent_conn.screen_width,
+            "height": agent_conn.screen_height,
+            "timestamp": agent_conn.last_screen_time,
+            "source": "remote_mac",
+        }
     if screen_capture is None:
         return JSONResponse(status_code=503, content={"error": "Screen capture not initialized"})
     img_base64 = screen_capture.capture_base64()
@@ -214,9 +221,19 @@ async def update_settings(settings: SettingsUpdate):
     if llm_parser is None:
         return JSONResponse(status_code=503, content={"error": "LLM parser not initialized"})
 
-    if settings.openai_api_key:
-        llm_parser.configure(settings.openai_api_key, settings.openai_model)
-        return {"status": "ok", "llm_enabled": True, "model": settings.openai_model}
+    if settings.openai_api_key or settings.anthropic_api_key:
+        llm_parser.configure(
+            openai_api_key=settings.openai_api_key,
+            openai_model=settings.openai_model,
+            anthropic_api_key=settings.anthropic_api_key,
+            claude_model=settings.claude_model,
+        )
+        return {
+            "status": "ok",
+            "llm_enabled": True,
+            "mode": llm_parser.mode,
+            "model": llm_parser.model,
+        }
     else:
         llm_parser.disable()
         return {"status": "ok", "llm_enabled": False}
@@ -226,8 +243,62 @@ async def update_settings(settings: SettingsUpdate):
 async def get_settings():
     return {
         "llm_enabled": llm_parser is not None and llm_parser.is_available,
-        "model": llm_parser._model if llm_parser else "gpt-4o-mini",
+        "mode": llm_parser.mode if llm_parser else "none",
+        "model": llm_parser.model if llm_parser else "none",
     }
+
+
+async def _execute_commands(commands: list[dict], session_id: str, use_agent: bool) -> tuple[list[dict], str]:
+    results = []
+    img_base64 = ""
+    if use_agent and agent_relay:
+        for cmd in commands:
+            result = await agent_relay.send_command(session_id, cmd)
+            if result:
+                results.append(result)
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)
+        agent_conn = agent_relay.get_agent(session_id)
+        img_base64 = agent_conn.last_screen if agent_conn else ""
+    else:
+        if pc_controller is None or screen_capture is None:
+            return results, img_base64
+        for cmd in commands:
+            result = pc_controller.execute(cmd)
+            results.append(result)
+            await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
+        img_base64 = screen_capture.capture_base64()
+    return results, img_base64
+
+
+def _resolve_agent(frontend_session_id: str) -> tuple[bool, str]:
+    use_agent = False
+    agent_session_id = frontend_session_id
+    if frontend_session_id and agent_relay:
+        if agent_relay.has_agent(frontend_session_id):
+            use_agent = True
+        elif session_manager:
+            session = session_manager.get_session(frontend_session_id)
+            if session:
+                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
+                if agent_conn:
+                    use_agent = True
+                    agent_session_id = agent_conn.session_id
+    return use_agent, agent_session_id
+
+
+async def _get_screenshot(agent_session_id: str, use_agent: bool) -> str:
+    if use_agent and agent_relay:
+        agent_conn = agent_relay.get_agent(agent_session_id)
+        if agent_conn and agent_conn.last_screen:
+            return agent_conn.last_screen
+    if screen_capture:
+        return screen_capture.capture_base64()
+    return ""
+
+
+MAX_AUTONOMOUS_STEPS = 7
 
 
 @app.post("/api/chat")
@@ -236,61 +307,91 @@ async def chat(msg: ChatMessage):
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
 
     session = None
-    use_agent = False
     if msg.session_id and session_manager:
         session = session_manager.get_session(msg.session_id)
         if session:
             session.add_message("user", msg.message)
-        if agent_relay and agent_relay.has_agent(msg.session_id):
-            use_agent = True
 
-    context = session.chat_history[-10:] if session else None
-    commands: list[dict] = []
+    use_agent, agent_session_id = _resolve_agent(msg.session_id)
+
+    all_results: list[dict] = []
+    all_actions: list[dict] = []
+    img_base64 = ""
     used_llm = False
+    provider_used = ""
+    autonomous_steps = 0
 
     if llm_parser and llm_parser.is_available:
-        commands = await llm_parser.parse(msg.message, context)
-        if commands:
+        screenshot = await _get_screenshot(agent_session_id, use_agent)
+
+        if screenshot:
+            provider_used = "claude" if llm_parser.mode in ("dual", "claude") else "openai"
             used_llm = True
 
-    if not commands:
-        commands = ai_parser.parse(msg.message)
+            for step in range(MAX_AUTONOMOUS_STEPS):
+                autonomous_steps += 1
+                step_result = await llm_parser.autonomous_step(
+                    msg.message, screenshot, all_actions,
+                )
 
-    results = []
-    if use_agent and agent_relay:
-        for cmd in commands:
-            result = await agent_relay.send_command(msg.session_id, cmd)
-            if result:
-                results.append(result)
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
-        agent_conn = agent_relay.get_agent(msg.session_id)
-        img_base64 = agent_conn.last_screen if agent_conn else ""
-    else:
-        if pc_controller is None or screen_capture is None:
-            return JSONResponse(status_code=503, content={"error": "System not initialized"})
-        for cmd in commands:
-            result = pc_controller.execute(cmd)
-            results.append(result)
-            await asyncio.sleep(0.3)
-        await asyncio.sleep(0.5)
-        img_base64 = screen_capture.capture_base64()
+                commands = step_result.get("commands", [])
+                task_complete = step_result.get("task_complete", False)
+                complete_reason = step_result.get("complete_reason", "")
+
+                if not commands and task_complete:
+                    print(f"[autonomous] step {step+1}: task_complete -> {complete_reason}")
+                    break
+
+                if not commands:
+                    print(f"[autonomous] step {step+1}: no commands returned, stopping")
+                    break
+
+                print(f"[autonomous] step {step+1}: executing {len(commands)} command(s)")
+                results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
+                all_results.extend(results)
+                for cmd, res in zip(commands, results):
+                    all_actions.append({**cmd, "result": res.get("description", "")})
+
+                if task_complete:
+                    print(f"[autonomous] step {step+1}: task_complete after actions -> {complete_reason}")
+                    break
+
+                await asyncio.sleep(1.0)
+                screenshot = await _get_screenshot(agent_session_id, use_agent)
+                if not screenshot:
+                    break
+        else:
+            context = session.chat_history[-10:] if session else None
+            commands = await llm_parser.parse(msg.message, context)
+            if commands:
+                used_llm = True
+                provider_used = "claude" if llm_parser.mode in ("dual", "claude") else "openai"
+                all_results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
+
+    if not used_llm:
+        commands = ai_parser.parse(msg.message)
+        all_results, img_base64 = await _execute_commands(commands, agent_session_id, use_agent)
+
+    if not img_base64:
+        img_base64 = await _get_screenshot(agent_session_id, use_agent)
 
     reply = ""
     if used_llm and llm_parser:
-        reply = await llm_parser.generate_reply(msg.message, results)
+        reply = await llm_parser.generate_reply(msg.message, all_results, provider_used)
     if not reply:
-        reply = ai_parser.generate_reply(msg.message, results)
+        reply = ai_parser.generate_reply(msg.message, all_results)
 
     if session:
         session.add_message("assistant", reply)
 
     return {
         "reply": reply,
-        "actions": results,
+        "actions": all_results,
         "screenshot": img_base64,
         "timestamp": time.time(),
         "used_llm": used_llm,
+        "provider": provider_used,
+        "autonomous_steps": autonomous_steps,
         "source": "remote_mac" if use_agent else "virtual_desktop",
     }
 
@@ -433,6 +534,11 @@ async def agent_status(session_id: str = ""):
         return {"connected": False, "active_agents": 0}
     if session_id:
         has = agent_relay.has_agent(session_id)
+        if not has and session_manager:
+            session = session_manager.get_session(session_id)
+            if session:
+                agent_conn = agent_relay.get_agent_by_code(session.connection_code)
+                has = agent_conn is not None
         return {"connected": has, "active_agents": agent_relay.active_agents, "session_id": session_id}
     return {"connected": False, "active_agents": agent_relay.active_agents}
 

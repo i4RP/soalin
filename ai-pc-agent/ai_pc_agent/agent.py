@@ -246,6 +246,184 @@ class PCAgent:
                 ny = int(pos[1] * 720 / self._screen_height)
                 return {"success": True, "action": action, "description": f"Mouse position: ({nx}, {ny})", "position": f"x:{nx} y:{ny}"}
 
+            elif action == "triple_click":
+                x = command.get("x")
+                y = command.get("y")
+                if x is not None and y is not None:
+                    sx = x * self._screen_width / 1280
+                    sy = y * self._screen_height / 720
+                    pyautogui.click(sx, sy, clicks=3, interval=0.08)
+                else:
+                    pyautogui.click(clicks=3, interval=0.08)
+                desc = f"Triple click at ({x}, {y})" if x is not None else "Triple click"
+                return {"success": True, "action": action, "description": desc}
+
+            elif action == "mouse_down":
+                x = command.get("x")
+                y = command.get("y")
+                button_map = {1: "left", 3: "right"}
+                btn = button_map.get(command.get("button", 1), "left")
+                if x is not None and y is not None:
+                    sx = x * self._screen_width / 1280
+                    sy = y * self._screen_height / 720
+                    pyautogui.moveTo(sx, sy)
+                pyautogui.mouseDown(button=btn)
+                return {"success": True, "action": action, "description": f"Mouse down ({btn})"}
+
+            elif action == "mouse_up":
+                x = command.get("x")
+                y = command.get("y")
+                button_map = {1: "left", 3: "right"}
+                btn = button_map.get(command.get("button", 1), "left")
+                if x is not None and y is not None:
+                    sx = x * self._screen_width / 1280
+                    sy = y * self._screen_height / 720
+                    pyautogui.moveTo(sx, sy)
+                pyautogui.mouseUp(button=btn)
+                return {"success": True, "action": action, "description": f"Mouse up ({btn})"}
+
+            elif action == "hover":
+                x = command.get("x", 0)
+                y = command.get("y", 0)
+                sx = x * self._screen_width / 1280
+                sy = y * self._screen_height / 720
+                pyautogui.moveTo(sx, sy)
+                return {"success": True, "action": action, "description": f"Hovering at ({x}, {y})"}
+
+            elif action == "select_all":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "a")
+                return {"success": True, "action": action, "description": "Selected all"}
+
+            elif action == "copy":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "c")
+                return {"success": True, "action": action, "description": "Copied"}
+
+            elif action == "paste":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "v")
+                return {"success": True, "action": action, "description": "Pasted"}
+
+            elif action == "cut":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "x")
+                return {"success": True, "action": action, "description": "Cut"}
+
+            elif action == "undo":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "z")
+                return {"success": True, "action": action, "description": "Undo"}
+
+            elif action == "redo":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "shift", "z")
+                return {"success": True, "action": action, "description": "Redo"}
+
+            elif action == "new_tab":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "t")
+                return {"success": True, "action": action, "description": "New tab"}
+
+            elif action == "close_tab":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "w")
+                return {"success": True, "action": action, "description": "Closed tab"}
+
+            elif action == "switch_tab":
+                direction = command.get("direction", "next")
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                if direction == "previous":
+                    pyautogui.hotkey(mod, "shift", "tab")
+                else:
+                    pyautogui.hotkey(mod, "tab")
+                return {"success": True, "action": action, "description": f"Switched to {direction} tab"}
+
+            elif action == "refresh_page":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "r")
+                return {"success": True, "action": action, "description": "Refreshed page"}
+
+            elif action == "go_back":
+                if self._platform == "Darwin":
+                    pyautogui.hotkey("command", "[")
+                else:
+                    pyautogui.hotkey("alt", "left")
+                return {"success": True, "action": action, "description": "Back"}
+
+            elif action == "go_forward":
+                if self._platform == "Darwin":
+                    pyautogui.hotkey("command", "]")
+                else:
+                    pyautogui.hotkey("alt", "right")
+                return {"success": True, "action": action, "description": "Forward"}
+
+            elif action == "address_bar":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "l")
+                import time as _time
+                _time.sleep(0.3)
+                url = command.get("url")
+                if url:
+                    pyautogui.typewrite(url, interval=0.02) if url.isascii() else pyautogui.write(url)
+                return {"success": True, "action": action, "description": f"Address bar{': ' + url if url else ''}"}
+
+            elif action == "find_in_page":
+                text = command.get("text", "")
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "f")
+                import time as _time
+                _time.sleep(0.3)
+                if text:
+                    pyautogui.typewrite(text, interval=0.03) if text.isascii() else pyautogui.write(text)
+                return {"success": True, "action": action, "description": f"Find: {text}"}
+
+            elif action == "zoom_in":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "=")
+                return {"success": True, "action": action, "description": "Zoomed in"}
+
+            elif action == "zoom_out":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "-")
+                return {"success": True, "action": action, "description": "Zoomed out"}
+
+            elif action == "zoom_reset":
+                mod = "command" if self._platform == "Darwin" else "ctrl"
+                pyautogui.hotkey(mod, "0")
+                return {"success": True, "action": action, "description": "Zoom reset"}
+
+            elif action == "close_window":
+                if self._platform == "Darwin":
+                    pyautogui.hotkey("command", "q")
+                else:
+                    pyautogui.hotkey("alt", "F4")
+                return {"success": True, "action": action, "description": "Closed window"}
+
+            elif action == "minimize_window":
+                if self._platform == "Darwin":
+                    pyautogui.hotkey("command", "m")
+                else:
+                    pyautogui.hotkey("super", "h")
+                return {"success": True, "action": action, "description": "Minimized window"}
+
+            elif action == "maximize_window":
+                if self._platform == "Darwin":
+                    pyautogui.hotkey("command", "ctrl", "f")
+                else:
+                    pyautogui.hotkey("super", "up")
+                return {"success": True, "action": action, "description": "Maximized window"}
+
+            elif action == "switch_window":
+                if self._platform == "Darwin":
+                    pyautogui.hotkey("command", "tab")
+                else:
+                    pyautogui.hotkey("alt", "tab")
+                return {"success": True, "action": action, "description": "Switched window"}
+
+            elif action == "take_screenshot":
+                return {"success": True, "action": action, "description": "Screenshot requested"}
+
             else:
                 return {"success": False, "action": action, "description": f"Unknown action: {action}"}
 

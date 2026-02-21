@@ -207,6 +207,138 @@ class PCController:
             )
         return {"success": True, "action": "open_app", "description": f"Opened app: {app_name}"}
 
+    def _action_triple_click(self, cmd: dict) -> dict:
+        x = cmd.get("x")
+        y = cmd.get("y")
+        if x is not None and y is not None:
+            self._xdotool(["mousemove", str(x), str(y)])
+        self._xdotool(["click", "--repeat", "3", "--delay", "80", "1"])
+        desc = f"Triple click at ({x}, {y})" if x is not None else "Triple click"
+        return {"success": True, "action": "triple_click", "description": desc}
+
+    def _action_mouse_down(self, cmd: dict) -> dict:
+        x = cmd.get("x")
+        y = cmd.get("y")
+        button = cmd.get("button", 1)
+        if x is not None and y is not None:
+            self._xdotool(["mousemove", str(x), str(y)])
+        self._xdotool(["mousedown", str(button)])
+        return {"success": True, "action": "mouse_down", "description": f"Mouse down (button {button})"}
+
+    def _action_mouse_up(self, cmd: dict) -> dict:
+        x = cmd.get("x")
+        y = cmd.get("y")
+        button = cmd.get("button", 1)
+        if x is not None and y is not None:
+            self._xdotool(["mousemove", str(x), str(y)])
+        self._xdotool(["mouseup", str(button)])
+        return {"success": True, "action": "mouse_up", "description": f"Mouse up (button {button})"}
+
+    def _action_hover(self, cmd: dict) -> dict:
+        x = cmd.get("x", 0)
+        y = cmd.get("y", 0)
+        self._xdotool(["mousemove", str(x), str(y)])
+        return {"success": True, "action": "hover", "description": f"Hovering at ({x}, {y})"}
+
+    def _action_select_all(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+a"])
+        return {"success": True, "action": "select_all", "description": "Selected all (Ctrl+A)"}
+
+    def _action_copy(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+c"])
+        return {"success": True, "action": "copy", "description": "Copied (Ctrl+C)"}
+
+    def _action_paste(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+v"])
+        return {"success": True, "action": "paste", "description": "Pasted (Ctrl+V)"}
+
+    def _action_cut(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+x"])
+        return {"success": True, "action": "cut", "description": "Cut (Ctrl+X)"}
+
+    def _action_undo(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+z"])
+        return {"success": True, "action": "undo", "description": "Undo (Ctrl+Z)"}
+
+    def _action_redo(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+shift+z"])
+        return {"success": True, "action": "redo", "description": "Redo (Ctrl+Shift+Z)"}
+
+    def _action_new_tab(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+t"])
+        return {"success": True, "action": "new_tab", "description": "New tab (Ctrl+T)"}
+
+    def _action_close_tab(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+w"])
+        return {"success": True, "action": "close_tab", "description": "Closed tab (Ctrl+W)"}
+
+    def _action_switch_tab(self, cmd: dict) -> dict:
+        direction = cmd.get("direction", "next")
+        if direction == "previous":
+            self._xdotool(["key", "ctrl+shift+Tab"])
+        else:
+            self._xdotool(["key", "ctrl+Tab"])
+        return {"success": True, "action": "switch_tab", "description": f"Switched to {direction} tab"}
+
+    def _action_refresh_page(self, cmd: dict) -> dict:
+        self._xdotool(["key", "F5"])
+        return {"success": True, "action": "refresh_page", "description": "Refreshed page (F5)"}
+
+    def _action_go_back(self, cmd: dict) -> dict:
+        self._xdotool(["key", "alt+Left"])
+        return {"success": True, "action": "go_back", "description": "Back (Alt+Left)"}
+
+    def _action_go_forward(self, cmd: dict) -> dict:
+        self._xdotool(["key", "alt+Right"])
+        return {"success": True, "action": "go_forward", "description": "Forward (Alt+Right)"}
+
+    def _action_address_bar(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+l"])
+        time.sleep(0.3)
+        url = cmd.get("url")
+        if url:
+            self._xdotool(["type", "--clearmodifiers", "--delay", "20", url])
+        return {"success": True, "action": "address_bar", "description": f"Address bar focused{', typed: ' + url if url else ''}"}
+
+    def _action_find_in_page(self, cmd: dict) -> dict:
+        text = cmd.get("text", "")
+        self._xdotool(["key", "ctrl+f"])
+        time.sleep(0.3)
+        if text:
+            self._xdotool(["type", "--clearmodifiers", "--delay", "30", text])
+        return {"success": True, "action": "find_in_page", "description": f"Find in page: {text}"}
+
+    def _action_zoom_in(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+plus"])
+        return {"success": True, "action": "zoom_in", "description": "Zoomed in"}
+
+    def _action_zoom_out(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+minus"])
+        return {"success": True, "action": "zoom_out", "description": "Zoomed out"}
+
+    def _action_zoom_reset(self, cmd: dict) -> dict:
+        self._xdotool(["key", "ctrl+0"])
+        return {"success": True, "action": "zoom_reset", "description": "Zoom reset to 100%"}
+
+    def _action_close_window(self, cmd: dict) -> dict:
+        self._xdotool(["key", "alt+F4"])
+        return {"success": True, "action": "close_window", "description": "Closed window (Alt+F4)"}
+
+    def _action_minimize_window(self, cmd: dict) -> dict:
+        self._xdotool(["key", "super+h"])
+        return {"success": True, "action": "minimize_window", "description": "Minimized window"}
+
+    def _action_maximize_window(self, cmd: dict) -> dict:
+        self._xdotool(["key", "super+Up"])
+        return {"success": True, "action": "maximize_window", "description": "Maximized window"}
+
+    def _action_switch_window(self, cmd: dict) -> dict:
+        self._xdotool(["key", "alt+Tab"])
+        return {"success": True, "action": "switch_window", "description": "Switched window (Alt+Tab)"}
+
+    def _action_take_screenshot(self, cmd: dict) -> dict:
+        return {"success": True, "action": "take_screenshot", "description": "Screenshot requested"}
+
     def _action_wait(self, cmd: dict) -> dict:
         seconds = min(float(cmd.get("seconds", 2)), 10)
         time.sleep(seconds)
