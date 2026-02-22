@@ -3,10 +3,22 @@ import './App.css'
 
 const isMobile = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768
 
-const GATEWAY_URL = import.meta.env.VITE_GATEWAY_URL || 'ws://localhost:18789'
 const GATEWAY_TOKEN = import.meta.env.VITE_GATEWAY_TOKEN || 'soalin-gateway-token'
-const SCREENSHOT_URL = import.meta.env.VITE_SCREENSHOT_URL || 'http://localhost:3001'
 const SESSION_KEY = 'soalin:main'
+
+function resolveUrls() {
+  const gwEnv = import.meta.env.VITE_GATEWAY_URL || ''
+  const ssEnv = import.meta.env.VITE_SCREENSHOT_URL || ''
+  if (gwEnv && gwEnv !== '__SAME_ORIGIN__') {
+    return { wsUrl: gwEnv, ssUrl: ssEnv || 'http://localhost:3001' }
+  }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return {
+    wsUrl: proto + '//' + location.host + '/ws',
+    ssUrl: location.origin + '/api'
+  }
+}
+const { wsUrl: GATEWAY_URL, ssUrl: SCREENSHOT_URL } = resolveUrls()
 
 interface ChatEntry {
   role: 'user' | 'assistant' | 'system'
